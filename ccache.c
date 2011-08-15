@@ -653,8 +653,8 @@ to_cache(struct args *args)
 		fd = open(tmp_stderr, O_RDONLY | O_BINARY);
 		if (fd != -1) {
 			if (str_eq(output_obj, "/dev/null")
-			    || (! output_to_real_object_first
-                                && access(tmp_obj, R_OK) == 0
+			    || (!output_to_real_object_first
+			        && access(tmp_obj, R_OK) == 0
 			        && move_file(tmp_obj, output_obj, 0) == 0)
 			    || errno == ENOENT) {
 				/* we can use a quick method of getting the failed output */
@@ -1035,11 +1035,11 @@ calculate_object_hash(struct args *args, struct mdfour *hash, int direct_mode)
 	 * For profile usage (-fprofile-use):
 	 * - hash profile data
 	 *
-	 *  -fbranch-probabilities, -fvpt usage are covered by
-	 *  -fprofile-generate/-fprofile-use
+	 * -fbranch-probabilities and -fvpt usage is covered by
+	 * -fprofile-generate/-fprofile-use.
 	 *
-	 *  The profile directory can be specified as an argument to
-	 *  -fprofile-generate=, -fprofile-use=, or -fprofile-dir
+	 * The profile directory can be specified as an argument to
+	 * -fprofile-generate=, -fprofile-use=, or -fprofile-dir=.
 	 */
 
 	/*
@@ -1599,18 +1599,17 @@ cc_process_args(struct args *orig_args, struct args **preprocessor_args,
 		}
 
 		if (str_startswith(argv[i], "-fprofile-")) {
-			char* arg_profile_dir = strchr(argv[i], '=');
+			const char* arg_profile_dir = strchr(argv[i], '=');
 			char* arg = x_strdup(argv[i]);
 			bool supported_profile_option = false;
 
 			if (arg_profile_dir) {
 				char* option = x_strndup(argv[i], arg_profile_dir - argv[i]);
 
-				/* convert to absolute path */
+				/* Convert to absolute path. */
 				arg_profile_dir = x_realpath(arg_profile_dir + 1);
 
-				/* We can get a better hit rate by using the
-				 * real path here */
+				/* We can get a better hit rate by using the real path here. */
 				free(arg);
 				arg = format("%s=%s", option, profile_dir);
 				cc_log("Rewriting arg to %s", arg);
@@ -1633,10 +1632,9 @@ cc_process_args(struct args *orig_args, struct args **preprocessor_args,
 				args_add(stripped_args, arg);
 				free(arg);
 
-				/* 
-				 * If the profile directory has already been
-				 * set, give up...hard to know what the user
-				 * means, and what the compiler will do.
+				/*
+				 * If the profile directory has already been set, give up... Hard to
+				 * know what the user means, and what the compiler will do.
 				 */
 				if (arg_profile_dir && profile_dir) {
 					cc_log("Profile directory already set; giving up");
@@ -1644,11 +1642,12 @@ cc_process_args(struct args *orig_args, struct args **preprocessor_args,
 					goto out;
 				} else if (arg_profile_dir) {
 					cc_log("Setting profile directory to %s", profile_dir);
-					profile_dir = arg_profile_dir;
+					profile_dir = x_strdup(arg_profile_dir);
 				}
 				continue;
 			}
 			cc_log("Unknown profile option: %s", argv[i]);
+			free(arg);
 		}
 
 		/*
