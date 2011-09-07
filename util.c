@@ -856,7 +856,6 @@ value_units(const char *s)
 	return (size_t)v;
 }
 
-#ifndef _WIN32
 /*
   a sane realpath() function, trying to cope with stupid path limits and
   a broken API
@@ -864,6 +863,7 @@ value_units(const char *s)
 char *
 x_realpath(const char *path)
 {
+#ifndef _WIN32
 	long maxlen = path_max(path);
 	char *ret, *p;
 
@@ -891,8 +891,22 @@ x_realpath(const char *path)
 	}
 	free(ret);
 	return NULL;
-}
+#else /* _WIN32 */
+        long len;
+        char* ret = 0;
+
+        /* figure out how big our buffer should be */
+        len = GetFullPathName(path, 0, ret, 0);
+        ret = x_malloc(len);
+
+        if (0 == GetFullPathName(path, len, ret, 0)) {
+            /* failed to get the full path name */
+            free(ret);
+            return NULL;
+        }
+        return ret;
 #endif /* !_WIN32 */
+}
 
 /* a getcwd that will returns an allocated buffer */
 char *
