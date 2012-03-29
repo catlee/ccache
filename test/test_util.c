@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2010 Joel Rosdahl
+ * Copyright (C) 2010-2012 Joel Rosdahl
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the Free
@@ -54,6 +54,104 @@ TEST(format_hash_as_string)
 	hash[15] = 42;
 	CHECK_STR_EQ_FREE2("1100000000000000000000000000002a-12345",
 	                   format_hash_as_string(hash, 12345));
+}
+
+TEST(subst_env_in_string)
+{
+	char *errmsg;
+	const char *shell = getenv("SHELL");
+
+	errmsg = "";
+	CHECK_STR_EQ_FREE2(shell,
+	                   subst_env_in_string("$SHELL", &errmsg));
+	CHECK(!errmsg);
+
+	errmsg = "";
+	CHECK_STR_EQ_FREE2("$",
+	                   subst_env_in_string("$", &errmsg));
+	CHECK(!errmsg);
+
+	errmsg = "";
+	CHECK_STR_EQ_FREE12(format("%s %s:%s", shell, shell, shell),
+	                    subst_env_in_string("$SHELL $SHELL:$SHELL", &errmsg));
+	CHECK(!errmsg);
+
+	errmsg = "";
+	CHECK_STR_EQ_FREE12(format("x%s", shell),
+	                    subst_env_in_string("x$SHELL", &errmsg));
+	CHECK(!errmsg);
+
+	errmsg = "";
+	CHECK_STR_EQ_FREE12(format("%sx", shell),
+	                    subst_env_in_string("${SHELL}x", &errmsg));
+	CHECK(!errmsg);
+
+	CHECK(!subst_env_in_string("$surelydoesntexist", &errmsg));
+	CHECK_STR_EQ_FREE2("environment variable \"surelydoesntexist\" not set",
+	                   errmsg);
+
+	CHECK(!subst_env_in_string("${SHELL", &errmsg));
+	CHECK_STR_EQ_FREE2("syntax error: missing '}' after \"SHELL\"", errmsg);
+}
+
+TEST(format_human_readable_size)
+{
+	CHECK_STR_EQ_FREE2("0.0 kB", format_human_readable_size(0));
+	CHECK_STR_EQ_FREE2("0.0 kB", format_human_readable_size(49));
+	CHECK_STR_EQ_FREE2("0.1 kB", format_human_readable_size(50));
+	CHECK_STR_EQ_FREE2("42.0 kB", format_human_readable_size(42 * 1000));
+	CHECK_STR_EQ_FREE2("1.0 MB", format_human_readable_size(1000 * 1000));
+	CHECK_STR_EQ_FREE2("1.2 MB", format_human_readable_size(1234 * 1000));
+	CHECK_STR_EQ_FREE2("438.5 MB",
+	                   format_human_readable_size(438.5 * 1000 * 1000));
+	CHECK_STR_EQ_FREE2("1.0 GB",
+	                   format_human_readable_size(1000 * 1000 * 1000));
+	CHECK_STR_EQ_FREE2("17.1 GB",
+	                   format_human_readable_size(17.11 * 1000 * 1000 * 1000));
+}
+
+TEST(format_parsable_size_with_suffix)
+{
+	CHECK_STR_EQ_FREE2("0", format_parsable_size_with_suffix(0));
+	CHECK_STR_EQ_FREE2("42.0k", format_parsable_size_with_suffix(42 * 1000));
+	CHECK_STR_EQ_FREE2("1.0M", format_parsable_size_with_suffix(1000 * 1000));
+	CHECK_STR_EQ_FREE2("1.2M", format_parsable_size_with_suffix(1234 * 1000));
+	CHECK_STR_EQ_FREE2("438.5M",
+	                   format_parsable_size_with_suffix(438.5 * 1000 * 1000));
+	CHECK_STR_EQ_FREE2("1.0G",
+	                   format_parsable_size_with_suffix(1000 * 1000 * 1000));
+	CHECK_STR_EQ_FREE2(
+		"17.1G",
+		format_parsable_size_with_suffix(17.11 * 1000 * 1000 * 1000));
+}
+
+TEST(parse_size_with_suffix)
+{
+	uint64_t size;
+	size_t i;
+	struct { const char *size; int64_t expected; } sizes[] = {
+		{"0", 0},
+		{"42", 42},
+
+		{"78k",       78 * 1000},
+		{"78K",       78 * 1000},
+		{"1.1 M",     1.1 * 1000 * 1000},
+		{"438.55M",   438.55 * 1000 * 1000},
+		{"1 G",       1 * 1000 * 1000 * 1000},
+		{"2T",        (int64_t)2 * 1000 * 1000 * 1000 * 1000},
+
+		{"78 Ki",     78 * 1024},
+		{"1.1Mi",     1.1 * 1024 * 1024},
+		{"438.55 Mi", 438.55 * 1024 * 1024},
+		{"1Gi",       1 * 1024 * 1024 * 1024},
+		{"2 Ti",      (int64_t)2 * 1024 * 1024 * 1024 * 1024},
+
+	};
+
+	for (i = 0; i < sizeof(sizes) / sizeof(sizes[0]); ++i) {
+		CHECKM(parse_size_with_suffix(sizes[i].size, &size), sizes[i].size);
+		CHECK_INT_EQ(sizes[i].expected, size);
+	}
 }
 
 TEST_SUITE_END

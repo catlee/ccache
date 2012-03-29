@@ -35,6 +35,8 @@ AC_HEADER_TIME
 AC_HEADER_STDBOOL
 AC_HEADER_SYS_WAIT
 
+AC_CHECK_TYPES(long long)
+
 AC_CHECK_HEADERS(ctype.h pwd.h stdlib.h string.h strings.h sys/time.h sys/mman.h)
 AC_CHECK_HEADERS(termios.h)
 
@@ -46,6 +48,7 @@ AC_CHECK_FUNCS(mkstemp)
 AC_CHECK_FUNCS(realpath)
 AC_CHECK_FUNCS(strndup)
 AC_CHECK_FUNCS(strtok_r)
+AC_CHECK_FUNCS(unsetenv)
 AC_CHECK_FUNCS(utimes)
 
 AC_CACHE_CHECK([for compar_fn_t in stdlib.h],ccache_cv_COMPAR_FN_T, [

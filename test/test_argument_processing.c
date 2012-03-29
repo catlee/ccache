@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2010-2011 Joel Rosdahl
+ * Copyright (C) 2010-2012 Joel Rosdahl
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the Free
@@ -21,8 +21,11 @@
  */
 
 #include "ccache.h"
+#include "conf.h"
 #include "test/framework.h"
 #include "test/util.h"
+
+extern struct conf *conf;
 
 TEST_SUITE(argument_processing)
 
@@ -33,7 +36,7 @@ TEST(dash_E_should_result_in_called_for_preprocessing)
 
 	create_file("foo.c", "");
 	CHECK(!cc_process_args(orig, &preprocessed, &compiler));
-	CHECK_UNS_EQ(1, stats_get_pending(STATS_PREPROCESSING));
+	CHECK_INT_EQ(1, stats_get_pending(STATS_PREPROCESSING));
 
 	args_free(orig);
 }
@@ -45,7 +48,7 @@ TEST(dash_M_should_be_unsupported)
 
 	create_file("foo.c", "");
 	CHECK(!cc_process_args(orig, &preprocessed, &compiler));
-	CHECK_UNS_EQ(1, stats_get_pending(STATS_UNSUPPORTED));
+	CHECK_INT_EQ(1, stats_get_pending(STATS_UNSUPPORTED));
 
 	args_free(orig);
 }
@@ -88,7 +91,6 @@ TEST(dependency_flags_that_take_an_argument_should_not_require_space_delimiter)
 
 TEST(sysroot_should_be_rewritten_if_basedir_is_used)
 {
-	extern char *base_dir;
 	extern char *current_working_dir;
 	struct args *orig =
 		args_init_from_string("cc --sysroot=/some/directory -c foo.c");
@@ -96,19 +98,19 @@ TEST(sysroot_should_be_rewritten_if_basedir_is_used)
 	create_file("foo.c", "");
 
 	CHECK(cc_process_args(orig, &act_cpp, &act_cc));
-	CHECK_STR_EQ(act_cpp->argv[1], "--sysroot=/some/directory");
+	CHECK_STR_EQ("--sysroot=/some/directory", act_cpp->argv[1]);
 	args_free(act_cpp);
 	args_free(act_cc);
 	cc_reset();
 
-	base_dir = "/some";
+	free(conf->base_dir);
+	conf->base_dir = x_strdup("/some");
 	current_working_dir = get_cwd();
 	CHECK(cc_process_args(orig, &act_cpp, &act_cc));
 	CHECK(str_startswith(act_cpp->argv[1], "--sysroot=../"));
 	args_free(orig);
 	args_free(act_cpp);
 	args_free(act_cc);
-	cc_reset();
 }
 
 TEST(MF_flag_with_immediate_argument_should_work_as_last_argument)
@@ -196,12 +198,12 @@ TEST(MT_flag_without_immediate_argument_should_not_add_MTobj)
 	args_free(orig);
 }
 
-TEST(MQ_flag_with_immediate_argument_should_add_MQobj)
+TEST(MQ_flag_with_immediate_argument_should_not_add_MQobj)
 {
 	struct args *orig = args_init_from_string(
 		"gcc -c -MD -MP -MFfoo.d -MQfoo.d foo.c");
 	struct args *exp_cpp = args_init_from_string(
-		"gcc -MD -MP -MFfoo.d -MQfoo.d -MQ foo.o");
+		"gcc -MD -MP -MFfoo.d -MQfoo.d");
 	struct args *exp_cc = args_init_from_string("gcc -c");
 	struct args *act_cpp = NULL, *act_cc = NULL;
 	create_file("foo.c", "");
@@ -213,12 +215,12 @@ TEST(MQ_flag_with_immediate_argument_should_add_MQobj)
 	args_free(orig);
 }
 
-TEST(MT_flag_with_immediate_argument_should_add_MQobj)
+TEST(MT_flag_with_immediate_argument_should_not_add_MQobj)
 {
 	struct args *orig = args_init_from_string(
 		"gcc -c -MD -MP -MFfoo.d -MTfoo.d foo.c");
 	struct args *exp_cpp = args_init_from_string(
-		"gcc -MD -MP -MFfoo.d -MTfoo.d -MQ foo.o");
+		"gcc -MD -MP -MFfoo.d -MTfoo.d");
 	struct args *exp_cc = args_init_from_string("gcc -c");
 	struct args *act_cpp = NULL, *act_cc = NULL;
 	create_file("foo.c", "");

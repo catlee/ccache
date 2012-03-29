@@ -3,7 +3,7 @@
 # A simple test suite for ccache.
 #
 # Copyright (C) 2002-2007 Andrew Tridgell
-# Copyright (C) 2009-2011 Joel Rosdahl
+# Copyright (C) 2009-2012 Joel Rosdahl
 #
 # This program is free software; you can redistribute it and/or modify it under
 # the terms of the GNU General Public License as published by the Free Software
@@ -67,7 +67,7 @@ randcode() {
 
 getstat() {
     stat="$1"
-    value=`$CCACHE -s | grep "$stat" | cut -c34-40`
+    value=`$CCACHE -s | grep "$stat" | cut -c34-`
     echo $value
 }
 
@@ -345,6 +345,21 @@ base_tests() {
         fi
     fi
 
+    testname="override path"
+    $CCACHE -Cz >/dev/null
+    override_path=`pwd`/override_path
+    rm -rf $override_path
+    mkdir $override_path
+    cat >$override_path/cc <<EOF
+#!/bin/sh
+touch override_path_compiler_executed
+EOF
+    chmod +x $override_path/cc
+    CCACHE_PATH=$override_path $CCACHE cc -c test1.c
+    if [ ! -f override_path_compiler_executed ]; then
+        test_failed "CCACHE_PATH had no effect"
+    fi
+
     testname="compilercheck=mtime"
     $CCACHE -Cz >/dev/null
     cat >compiler.sh <<EOF
@@ -540,11 +555,8 @@ hardlink_suite() {
     CCACHE_COMPILE="$CCACHE $COMPILER"
     CCACHE_HARDLINK=1
     export CCACHE_HARDLINK
-    CCACHE_NOCOMPRESS=1
-    export CCACHE_NOCOMPRESS
     base_tests
     unset CCACHE_HARDLINK
-    unset CCACHE_NOCOMPRESS
 }
 
 cpp2_suite() {
@@ -1152,6 +1164,40 @@ EOF
     checkstat 'cache miss' 1
 
     ##################################################################
+    # Check that environment variables that affect the preprocessor are taken
+    # into account.
+    testname="environment variables"
+    $CCACHE -Cz >/dev/null
+    rm -rf subdir1 subdir2
+    mkdir subdir1 subdir2
+    cat <<EOF >subdir1/foo.h
+int foo;
+EOF
+    cat <<EOF >subdir2/foo.h
+int foo;
+EOF
+    cat <<EOF >foo.c
+#include <foo.h>
+EOF
+    backdate subdir1/foo.h subdir2/foo.h
+    CPATH=subdir1 $CCACHE $COMPILER -c foo.c
+    checkstat 'cache hit (direct)' 0
+    checkstat 'cache hit (preprocessed)' 0
+    checkstat 'cache miss' 1
+    CPATH=subdir1 $CCACHE $COMPILER -c foo.c
+    checkstat 'cache hit (direct)' 1
+    checkstat 'cache hit (preprocessed)' 0
+    checkstat 'cache miss' 1
+    CPATH=subdir2 $CCACHE $COMPILER -c foo.c
+    checkstat 'cache hit (direct)' 1
+    checkstat 'cache hit (preprocessed)' 0
+    checkstat 'cache miss' 2 # subdir2 is part of the preprocessor output
+    CPATH=subdir2 $CCACHE $COMPILER -c foo.c
+    checkstat 'cache hit (direct)' 2
+    checkstat 'cache hit (preprocessed)' 0
+    checkstat 'cache miss' 2
+
+    #################################################################
     # Check that strange "#line" directives are handled.
     testname="#line directives with troublesome files"
     $CCACHE -Cz >/dev/null
@@ -1615,7 +1661,7 @@ cleanup_suite() {
     $CCACHE -C >/dev/null
     prepare_cleanup_test $CCACHE_DIR/a
     touch $CCACHE_DIR/a/abcd.unknown
-    $CCACHE -c >/dev/null # update counters
+    $CCACHE -F 0 -M 0 -c >/dev/null # update counters
     checkstat 'files in cache' 31
     # (9/10) * 30 * 16 = 432
     $CCACHE -F 432 -M 0 >/dev/null
@@ -1808,6 +1854,47 @@ EOF
     checkstat 'cache miss' 2
 }
 
+upgrade_suite() {
+    testname="keep maxfiles and maxsize settings"
+    rm -rf $CCACHE_DIR $CCACHE_CONFIGPATH
+    mkdir -p $CCACHE_DIR/0
+    echo "0 0 0 0 0 0 0 0 0 0 0 0 0 2000 131072" >$CCACHE_DIR/0/stats
+    checkstat 'max files' 32000
+    checkstat 'max cache size' '2.1 GB'
+}
+
+prefix_suite() {
+    testname="prefix"
+    $CCACHE -Cz >/dev/null
+    rm -f prefix.result
+    cat <<'EOF' >prefix-a
+#!/bin/sh
+echo a >>prefix.result
+exec "$@"
+EOF
+    cat <<'EOF' >prefix-b
+#!/bin/sh
+echo b >>prefix.result
+exec "$@"
+EOF
+    chmod +x prefix-a prefix-b
+    cat <<'EOF' >file.c
+int foo;
+EOF
+    PATH=.:$PATH CCACHE_PREFIX="prefix-a prefix-b" $CCACHE $COMPILER -c file.c
+    checkstat 'cache hit (direct)' 0
+    checkstat 'cache hit (preprocessed)' 0
+    checkstat 'cache miss' 1
+    checkfile prefix.result "a
+b"
+    PATH=.:$PATH CCACHE_PREFIX="prefix-a prefix-b" $CCACHE $COMPILER -c file.c
+    checkstat 'cache hit (direct)' 0
+    checkstat 'cache hit (preprocessed)' 1
+    checkstat 'cache miss' 1
+    checkfile prefix.result "a
+b"
+}
+
 ######################################################################
 # main program
 
@@ -1840,6 +1927,9 @@ CCACHE_DIR=`pwd`/.ccache
 export CCACHE_DIR
 CCACHE_LOGFILE=`pwd`/ccache.log
 export CCACHE_LOGFILE
+CCACHE_CONFIGPATH=`pwd`/ccache.conf
+export CCACHE_CONFIGPATH
+touch $CCACHE_CONFIGPATH
 
 # ---------------------------------------
 
@@ -1857,6 +1947,8 @@ readonly
 extrafiles
 cleanup
 pch
+upgrade
+prefix
 "
 
 host_os="`uname -s`"

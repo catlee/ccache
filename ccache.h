@@ -3,6 +3,7 @@
 
 #include "system.h"
 #include "mdfour.h"
+#include "conf.h"
 #include "counters.h"
 
 #ifdef __GNUC__
@@ -32,8 +33,8 @@ enum stats {
 	STATS_LINK = 10,
 	STATS_NUMFILES = 11,
 	STATS_TOTALSIZE = 12,
-	STATS_MAXFILES = 13,
-	STATS_MAXSIZE = 14,
+	STATS_OBSOLETE_MAXFILES = 13,
+	STATS_OBSOLETE_MAXSIZE = 14,
 	STATS_SOURCELANG = 15,
 	STATS_DEVICE = 16,
 	STATS_NOINPUT = 17,
@@ -98,14 +99,16 @@ bool hash_file(struct mdfour *md, const char *fname);
 /* ------------------------------------------------------------------------- */
 /* util.c */
 
+void cc_vlog(const char *format, va_list ap);
 void cc_log(const char *format, ...) ATTR_FORMAT(printf, 1, 2);
+void cc_bulklog(const char *format, ...) ATTR_FORMAT(printf, 1, 2);
 void cc_log_argv(const char *prefix, char **argv);
 void fatal(const char *format, ...) ATTR_FORMAT(printf, 1, 2);
 void copy_fd(int fd_in, int fd_out);
-int copy_file(const char *src, const char *dest, int compress_dest);
-int move_file(const char *src, const char *dest, int compress_dest);
+int copy_file(const char *src, const char *dest, int compress_level);
+int move_file(const char *src, const char *dest, int compress_level);
 int move_uncompressed_file(const char *src, const char *dest,
-                           int compress_dest);
+                           int compress_level);
 bool file_is_compressed(const char *filename);
 int create_dir(const char *dir);
 int create_parent_dirs(const char *path);
@@ -114,13 +117,13 @@ const char *tmp_string(void);
 char *format_hash_as_string(const unsigned char *hash, int size);
 int create_cachedirtag(const char *dir);
 char *format(const char *format, ...) ATTR_FORMAT(printf, 1, 2);
+void reformat(char **ptr, const char *format, ...) ATTR_FORMAT(printf, 2, 3);
 char *x_strdup(const char *s);
 char *x_strndup(const char *s, size_t n);
 void *x_malloc(size_t size);
 void *x_calloc(size_t nmemb, size_t size);
 void *x_realloc(void *ptr, size_t size);
-void x_asprintf2(char **ptr, const char *format, ...)
-	ATTR_FORMAT(printf, 2, 3);
+void x_unsetenv(const char *name);
 void traverse(const char *dir, void (*fn)(const char *, struct stat *));
 char *basename(const char *path);
 char *dirname(const char *path);
@@ -128,8 +131,9 @@ const char *get_extension(const char *path);
 char *remove_extension(const char *path);
 size_t file_size(struct stat *st);
 int safe_create_wronly(const char *fname);
-char *format_size(size_t v);
-size_t value_units(const char *s);
+char *format_human_readable_size(uint64_t size);
+char *format_parsable_size_with_suffix(uint64_t size);
+bool parse_size_with_suffix(const char *str, uint64_t *size);
 char *x_realpath(const char *path);
 char *gnu_getcwd(void);
 #ifndef HAVE_STRTOK_R
@@ -152,6 +156,7 @@ char *x_readlink(const char *path);
 #endif
 bool read_file(const char *path, size_t size_hint, char **data, size_t *size);
 char *read_text_file(const char *path, size_t size_hint);
+char *subst_env_in_string(const char *str, char **errmsg);
 
 /* ------------------------------------------------------------------------- */
 /* stats.c */
@@ -160,10 +165,10 @@ void stats_update(enum stats stat);
 void stats_flush(void);
 unsigned stats_get_pending(enum stats stat);
 void stats_zero(void);
-void stats_summary(void);
-void stats_update_size(enum stats stat, size_t size, unsigned files);
-void stats_get_limits(const char *dir, unsigned *maxfiles, unsigned *maxsize);
-int stats_set_limits(long maxfiles, long maxsize);
+void stats_summary(struct conf *conf);
+void stats_update_size(enum stats stat, uint64_t size, unsigned files);
+void stats_get_obsolete_limits(const char *dir, unsigned *maxfiles,
+                               uint64_t *maxsize);
 void stats_set_sizes(const char *dir, size_t num_files, size_t total_size);
 void stats_read(const char *path, struct counters *counters);
 void stats_write(const char *path, struct counters *counters);
@@ -184,9 +189,9 @@ void exitfn_call(void);
 /* ------------------------------------------------------------------------- */
 /* cleanup.c */
 
-void cleanup_dir(const char *dir, size_t maxfiles, size_t maxsize);
-void cleanup_all(const char *dir);
-void wipe_all(const char *dir);
+void cleanup_dir(struct conf *conf, const char *dir);
+void cleanup_all(struct conf *conf);
+void wipe_all(struct conf *conf);
 
 /* ------------------------------------------------------------------------- */
 /* execute.c */
@@ -196,7 +201,6 @@ int execute(char **argv,
             const char *path_stderr);
 char *find_executable(const char *name, const char *exclude_name);
 void print_command(FILE *fp, char **argv);
-void print_executed_command(FILE *fp, char **argv);
 
 /* ------------------------------------------------------------------------- */
 /* lockfile.c */

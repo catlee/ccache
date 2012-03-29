@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2009-2010 Joel Rosdahl
+ * Copyright (C) 2009-2012 Joel Rosdahl
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the Free
@@ -66,7 +66,7 @@ static const uint32_t MAGIC = 0x63436d46U;
 static const uint8_t  VERSION = 0;
 static const uint32_t MAX_MANIFEST_ENTRIES = 100;
 
-#define static_assert(e) do { enum { static_assert__ = 1/(e) }; } while (0)
+#define static_assert(e) do { enum { static_assert__ = 1/(e) }; } while (false)
 
 struct file_info {
 	/* Index to n_files. */
@@ -139,7 +139,18 @@ free_manifest(struct manifest *mf)
 		free(mf->objects[i].file_info_indexes);
 	}
 	free(mf->objects);
+	free(mf);
 }
+
+#define READ_BYTE(var) \
+	do { \
+		int ch_; \
+		ch_ = gzgetc(f); \
+		if (ch_ == EOF) { \
+			goto error; \
+		} \
+		(var) = ch_ & 0xFF; \
+	} while (false)
 
 #define READ_INT(size, var) \
 	do { \
@@ -154,7 +165,7 @@ free_manifest(struct manifest *mf)
 			(var) <<= 8; \
 			(var) |= ch_ & 0xFF; \
 		} \
-	} while (0)
+	} while (false)
 
 #define READ_STR(var) \
 	do { \
@@ -175,7 +186,7 @@ free_manifest(struct manifest *mf)
 			goto error; \
 		} \
 		(var) = x_strdup(buf_); \
-	} while (0)
+	} while (false)
 
 #define READ_BYTES(n, var) \
 	do { \
@@ -188,7 +199,7 @@ free_manifest(struct manifest *mf)
 			} \
 			(var)[i_] = ch_; \
 		} \
-	} while (0)
+	} while (false)
 
 static struct manifest *
 create_empty_manifest(void)
@@ -222,14 +233,14 @@ read_manifest(gzFile f)
 		free_manifest(mf);
 		return NULL;
 	}
-	READ_INT(1, mf->version);
+	READ_BYTE(mf->version);
 	if (mf->version != VERSION) {
 		cc_log("Manifest file has unknown version %u", mf->version);
 		free_manifest(mf);
 		return NULL;
 	}
 
-	READ_INT(1, mf->hash_size);
+	READ_BYTE(mf->hash_size);
 	if (mf->hash_size != 16) {
 		/* Temporary measure until we support different hash algorithms. */
 		cc_log("Manifest file has unsupported hash size %u", mf->hash_size);
@@ -285,14 +296,14 @@ error:
 				goto error; \
 			} \
 		} \
-	} while (0)
+	} while (false)
 
 #define WRITE_STR(var) \
 	do { \
 		if (gzputs(f, var) == EOF || gzputc(f, '\0') == EOF) { \
 			goto error; \
 		} \
-	} while (0)
+	} while (false)
 
 #define WRITE_BYTES(n, var) \
 	do { \
@@ -302,7 +313,7 @@ error:
 				goto error; \
 			} \
 		} \
-	} while (0)
+	} while (false)
 
 static int
 write_manifest(gzFile f, const struct manifest *mf)
@@ -344,7 +355,7 @@ error:
 }
 
 static int
-verify_object(struct manifest *mf, struct object *obj,
+verify_object(struct conf *conf, struct manifest *mf, struct object *obj,
               struct hashtable *hashed_files)
 {
 	uint32_t i;
@@ -359,7 +370,7 @@ verify_object(struct manifest *mf, struct object *obj,
 		if (!actual) {
 			actual = x_malloc(sizeof(*actual));
 			hash_start(&hash);
-			result = hash_source_code_file(&hash, mf->files[fi->index]);
+			result = hash_source_code_file(conf, &hash, mf->files[fi->index]);
 			if (result & HASH_SOURCE_CODE_ERROR) {
 				cc_log("Failed hashing %s", mf->files[fi->index]);
 				free(actual);
@@ -523,7 +534,7 @@ add_object_entry(struct manifest *mf,
  * on failure.
  */
 struct file_hash *
-manifest_get(const char *manifest_path)
+manifest_get(struct conf *conf, const char *manifest_path)
 {
 	int fd;
 	gzFile f = NULL;
@@ -554,7 +565,7 @@ manifest_get(const char *manifest_path)
 
 	/* Check newest object first since it's a bit more likely to match. */
 	for (i = mf->n_objects; i > 0; i--) {
-		if (verify_object(mf, &mf->objects[i - 1], hashed_files)) {
+		if (verify_object(conf, mf, &mf->objects[i - 1], hashed_files)) {
 			fh = x_malloc(sizeof(*fh));
 			*fh = mf->objects[i - 1].hash;
 			goto out;

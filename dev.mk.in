@@ -4,6 +4,7 @@ CFLAGS += -Werror
 CPPFLAGS += -MD -MP -MF .deps/$(subst .._,,$(subst /,_,$<)).d
 
 ASCIIDOC = asciidoc
+GPERF = gperf
 XSLTPROC = xsltproc
 MANPAGE_XSL = /etc/asciidoc/docbook-xsl/manpage.xsl
 
@@ -25,7 +26,7 @@ built_dist_files = $(generated_docs)
 headers = \
     ccache.h hashtable.h hashtable_itr.h hashtable_private.h hashutil.h \
     manifest.h mdfour.h counters.h murmurhashneutral2.h getopt_long.h \
-    language.h system.h compopt.h macroskip.h \
+    language.h system.h compopt.h macroskip.h conf.h \
     test/framework.h test/suites.h test/util.h
 
 files_to_clean += *.tar.bz2 *.tar.gz *.tar.xz *.xml .deps/*
@@ -35,7 +36,8 @@ files_to_distclean += .deps version.c dev.mk
 source_dist_files = \
     main.c $(base_sources) $(test_sources) $(headers) zlib/*.c zlib/*.h \
     config.h.in configure install-sh Makefile.in test.sh GPL-3.0.txt \
-    AUTHORS.txt INSTALL.txt LICENSE.txt MANUAL.txt NEWS.txt README.txt
+    AUTHORS.txt INSTALL.txt LICENSE.txt MANUAL.txt NEWS.txt README.txt \
+    confitems_lookup.c envtoconfitems_lookup.c
 dist_files = \
     $(addprefix $(srcdir)/, $(source_dist_files)) \
     $(built_dist_files)
@@ -44,6 +46,10 @@ ifneq ($(shell sed 's/.*"\(.*\)".*/\1/' version.c 2>/dev/null),$(version))
   $(shell echo 'const char CCACHE_VERSION[] = "$(version)";' >version.c)
 endif
 version.o: version.c
+
+%_lookup.c: %.gperf
+	$(GPERF) $< >$@
+	echo "static const size_t `echo $* | tr a-z A-Z`_TOTAL_KEYWORDS = `sed -nr 's/.*TOTAL_KEYWORDS = ([0-9]+).*/\1/p' $@`;" >>$@
 
 .PHONY: dist
 dist: $(dist_archives)

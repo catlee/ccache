@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2002 Andrew Tridgell
- * Copyright (C) 2009-2011 Joel Rosdahl
+ * Copyright (C) 2009-2012 Joel Rosdahl
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the Free
@@ -38,15 +38,16 @@ static FILE *logfile;
 static bool
 init_log(void)
 {
-	extern char *cache_logfile;
+	extern struct conf *conf;
 
 	if (logfile) {
 		return true;
 	}
-	if (!cache_logfile) {
+	assert(conf);
+	if (str_eq(conf->log_file, "")) {
 		return false;
 	}
-	logfile = fopen(cache_logfile, "a");
+	logfile = fopen(conf->log_file, "a");
 	if (logfile) {
 		return true;
 	} else {
@@ -55,22 +56,26 @@ init_log(void)
 }
 
 static void
-log_prefix(void)
+log_prefix(bool log_updated_time)
 {
 #ifdef HAVE_GETTIMEOFDAY
 	char timestamp[100];
 	struct timeval tv;
 	struct tm *tm;
+	static char prefix[200];
 
-	gettimeofday(&tv, NULL);
+	if (log_updated_time) {
+		gettimeofday(&tv, NULL);
 #ifdef __MINGW64_VERSION_MAJOR
-	tm = _localtime32(&tv.tv_sec);
+		tm = _localtime32(&tv.tv_sec);
 #else
-	tm = localtime(&tv.tv_sec);
+		tm = localtime(&tv.tv_sec);
 #endif
-	strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%S", tm);
-	fprintf(logfile, "[%s.%06d %-5d] ", timestamp, (int)tv.tv_usec,
-	        (int)getpid());
+		strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%S", tm);
+		snprintf(prefix, sizeof(prefix),
+		         "[%s.%06d %-5d] ", timestamp, (int)tv.tv_usec, (int)getpid());
+	}
+	fputs(prefix, logfile);
 #else
 	fprintf(logfile, "[%-5d] ", (int)getpid());
 #endif
@@ -97,24 +102,53 @@ path_max(const char *path)
 }
 #endif /* !_WIN32 */
 
+static void
+vlog(const char *format, va_list ap, bool log_updated_time)
+{
+	if (!init_log()) {
+		return;
+	}
+
+	log_prefix(log_updated_time);
+	vfprintf(logfile, format, ap);
+	fprintf(logfile, "\n");
+}
+
 /*
- * Write a message to the CCACHE_LOGFILE location (adding a newline).
+ * Write a message to the log file (adding a newline) and flush.
+ */
+void
+cc_vlog(const char *format, va_list ap)
+{
+	vlog(format, ap, true);
+}
+
+/*
+ * Write a message to the log file (adding a newline) and flush.
  */
 void
 cc_log(const char *format, ...)
 {
 	va_list ap;
-
-	if (!init_log()) {
-		return;
-	}
-
-	log_prefix();
 	va_start(ap, format);
-	vfprintf(logfile, format, ap);
+	vlog(format, ap, true);
 	va_end(ap);
-	fprintf(logfile, "\n");
-	fflush(logfile);
+	if (logfile) {
+		fflush(logfile);
+	}
+}
+
+/*
+ * Write a message to the log file (adding a newline) without flushing and with
+ * a reused timestamp.
+ */
+void
+cc_bulklog(const char *format, ...)
+{
+	va_list ap;
+	va_start(ap, format);
+	vlog(format, ap, false);
+	va_end(ap);
 }
 
 /*
@@ -127,7 +161,7 @@ cc_log_argv(const char *prefix, char **argv)
 		return;
 	}
 
-	log_prefix();
+	log_prefix(true);
 	fputs(prefix, logfile);
 	print_command(logfile, argv);
 	fflush(logfile);
@@ -145,7 +179,7 @@ fatal(const char *format, ...)
 	va_end(ap);
 
 	cc_log("FATAL: %s", msg);
-	fprintf(stderr, "ccache: FATAL: %s\n", msg);
+	fprintf(stderr, "ccache: error: %s\n", msg);
 
 	exit(1);
 }
@@ -191,11 +225,11 @@ mkstemp(char *template)
 #endif
 
 /*
- * Copy src to dest, decompressing src if needed. compress_dest decides whether
- * dest will be compressed.
+ * Copy src to dest, decompressing src if needed. compress_level > 0 decides
+ * whether dest will be compressed, and with which compression level.
  */
 int
-copy_file(const char *src, const char *dest, int compress_dest)
+copy_file(const char *src, const char *dest, int compress_level)
 {
 	int fd_in = -1, fd_out = -1;
 	gzFile gz_in = NULL, gz_out = NULL;
@@ -209,8 +243,8 @@ copy_file(const char *src, const char *dest, int compress_dest)
 	int errnum;
 
 	tmp_name = format("%s.%s.XXXXXX", dest, tmp_string());
-	cc_log("Copying %s to %s via %s (%s)",
-	       src, dest, tmp_name, compress_dest ? "compressed": "uncompressed");
+	cc_log("Copying %s to %s via %s (%scompressed)",
+	       src, dest, tmp_name, compress_level > 0 ? "" : "un");
 
 	/* open source file */
 	fd_in = open(src, O_RDONLY | O_BINARY);
@@ -233,7 +267,7 @@ copy_file(const char *src, const char *dest, int compress_dest)
 		goto error;
 	}
 
-	if (compress_dest) {
+	if (compress_level > 0) {
 		/*
 		 * A gzip file occupies at least 20 bytes, so it will always
 		 * occupy an entire filesystem block, even for empty files.
@@ -244,20 +278,21 @@ copy_file(const char *src, const char *dest, int compress_dest)
 			goto error;
 		}
 		if (file_size(&st) == 0) {
-			compress_dest = 0;
+			compress_level = 0;
 		}
 	}
 
-	if (compress_dest) {
+	if (compress_level > 0) {
 		gz_out = gzdopen(dup(fd_out), "wb");
 		if (!gz_out) {
 			cc_log("gzdopen(dest) error: %s", strerror(errno));
 			goto error;
 		}
+		gzsetparams(gz_out, compress_level, Z_DEFAULT_STRATEGY);
 	}
 
 	while ((n = gzread(gz_in, buf, sizeof(buf))) > 0) {
-		if (compress_dest) {
+		if (compress_level > 0) {
 			written = gzwrite(gz_out, buf, n);
 		} else {
 			ssize_t count;
@@ -271,7 +306,7 @@ copy_file(const char *src, const char *dest, int compress_dest)
 			} while (written < n);
 		}
 		if (written != n) {
-			if (compress_dest) {
+			if (compress_level > 0) {
 				cc_log("gzwrite error: %s (errno: %s)",
 				       gzerror(gz_in, &errnum),
 				       strerror(errno));
@@ -346,11 +381,11 @@ error:
 
 /* Run copy_file() and, if successful, delete the source file. */
 int
-move_file(const char *src, const char *dest, int compress_dest)
+move_file(const char *src, const char *dest, int compress_level)
 {
 	int ret;
 
-	ret = copy_file(src, dest, compress_dest);
+	ret = copy_file(src, dest, compress_level);
 	if (ret != -1) {
 		x_unlink(src);
 	}
@@ -362,10 +397,10 @@ move_file(const char *src, const char *dest, int compress_dest)
  * are on the same file system.
  */
 int
-move_uncompressed_file(const char *src, const char *dest, int compress_dest)
+move_uncompressed_file(const char *src, const char *dest, int compress_level)
 {
-	if (compress_dest) {
-		return move_file(src, dest, compress_dest);
+	if (compress_level > 0) {
+		return move_file(src, dest, compress_level);
 	} else {
 		return x_rename(src, dest);
 	}
@@ -644,12 +679,22 @@ x_realloc(void *ptr, size_t size)
 	return p2;
 }
 
+/* This is like unsetenv. */
+void x_unsetenv(const char *name)
+{
+#ifdef HAVE_UNSETENV
+	unsetenv(name);
+#else
+	putenv(x_strdup(name)); /* Leak to environment. */
+#endif
+}
 
 /*
- * This is like x_asprintf() but frees *ptr if *ptr != NULL.
+ * Construct a string according to the format and store it in *ptr. The
+ * original *ptr is then freed.
  */
 void
-x_asprintf2(char **ptr, const char *format, ...)
+reformat(char **ptr, const char *format, ...)
 {
 	char *saved = *ptr;
 	va_list ap;
@@ -657,11 +702,11 @@ x_asprintf2(char **ptr, const char *format, ...)
 	*ptr = NULL;
 	va_start(ap, format);
 	if (vasprintf(ptr, format, ap) == -1) {
-		fatal("Out of memory in x_asprintf2");
+		fatal("Out of memory in reformat");
 	}
 	va_end(ap);
 
-	if (!ptr) fatal("Out of memory in x_asprintf2");
+	if (!ptr) fatal("Out of memory in reformat");
 	if (saved) {
 		free(saved);
 	}
@@ -814,46 +859,83 @@ safe_create_wronly(const char *fname)
 	return fd;
 }
 
-/* Format a size (in KiB) as a human-readable string. Caller frees. */
+/* Format a size as a human-readable string. Caller frees. */
 char *
-format_size(size_t v)
+format_human_readable_size(uint64_t v)
 {
 	char *s;
-	if (v >= 1024*1024) {
-		s = format("%.1f Gbytes", v/((double)(1024*1024)));
-	} else if (v >= 1024) {
-		s = format("%.1f Mbytes", v/((double)(1024)));
+	if (v >= 1000*1000*1000) {
+		s = format("%.1f GB", v/((double)(1000*1000*1000)));
+	} else if (v >= 1000*1000) {
+		s = format("%.1f MB", v/((double)(1000*1000)));
 	} else {
-		s = format("%.0f Kbytes", (double)v);
+		s = format("%.1f kB", v/((double)(1000)));
 	}
 	return s;
 }
 
-/* return a value in multiples of 1024 give a string that can end
-   in K, M or G
-*/
-size_t
-value_units(const char *s)
+/* Format a size as a parsable string. Caller frees. */
+char *
+format_parsable_size_with_suffix(uint64_t size)
 {
-	char m;
-	double v = atof(s);
-	m = s[strlen(s)-1];
-	switch (m) {
-	case 'G':
-	case 'g':
-	default:
-		v *= 1024*1024;
-		break;
-	case 'M':
-	case 'm':
-		v *= 1024;
-		break;
-	case 'K':
-	case 'k':
-		v *= 1;
-		break;
+	char *s;
+	if (size >= 1000*1000*1000) {
+		s = format("%.1fG", size / ((double)(1000*1000*1000)));
+	} else if (size >= 1000*1000) {
+		s = format("%.1fM", size / ((double)(1000*1000)));
+	} else if (size >= 1000) {
+		s = format("%.1fk", size / ((double)(1000)));
+	} else {
+		s = format("%u", (unsigned)size);
 	}
-	return (size_t)v;
+	return s;
+}
+
+/*
+ * Parse a "size value", i.e. a string that can end in k, M, G, T (10-based
+ * suffixes) or Ki, Mi, Gi, Ti (2-based suffixes). For backward compatibility,
+ * K is also recognized as a synonym of k.
+ */
+bool
+parse_size_with_suffix(const char *str, uint64_t *size)
+{
+	char *p;
+	double x;
+
+	errno = 0;
+	x = strtod(str, &p);
+	if (errno != 0 || x < 0 || p == str || *str == '\0') {
+		return false;
+	}
+
+	while (isspace(*p)) {
+		++p;
+	}
+
+	if (*p != '\0') {
+		unsigned multiplier;
+		if (*(p+1) == 'i') {
+			multiplier = 1024;
+		} else {
+			multiplier = 1000;
+		}
+		switch (*p) {
+		case 'T':
+			x *= multiplier;
+		case 'G':
+			x *= multiplier;
+		case 'M':
+			x *= multiplier;
+		case 'K':
+		case 'k':
+			x *= multiplier;
+			break;
+		default:
+			return false;
+		}
+	}
+	*size = x;
+	return true;
 }
 
 /*
@@ -914,7 +996,7 @@ gnu_getcwd(void)
 {
 	unsigned size = 128;
 
-	while (1) {
+	while (true) {
 		char *buffer = (char *)x_malloc(size);
 		if (getcwd(buffer, size) == buffer) {
 			return buffer;
@@ -1084,7 +1166,7 @@ get_relative_path(const char *from, const char *to)
 	common_prefix_len = common_dir_prefix_length(from, to);
 	for (p = from + common_prefix_len; *p; p++) {
 		if (*p == '/') {
-			x_asprintf2(&result, "../%s", result);
+			reformat(&result, "../%s", result);
 		}
 	}
 	if (strlen(to) > common_prefix_len) {
@@ -1092,7 +1174,7 @@ get_relative_path(const char *from, const char *to)
 		while (*p == '/') {
 			p++;
 		}
-		x_asprintf2(&result, "%s%s", result, p);
+		reformat(&result, "%s%s", result, p);
 	}
 	i = strlen(result) - 1;
 	while (i >= 0 && result[i] == '/') {
@@ -1126,12 +1208,12 @@ bool
 is_full_path(const char *path)
 {
 	if (strchr(path, '/'))
-		return 1;
+		return true;
 #ifdef _WIN32
 	if (strchr(path, '\\'))
-		return 1;
+		return true;
 #endif
-	return 0;
+	return false;
 }
 
 /*
@@ -1183,15 +1265,19 @@ x_unlink(const char *path)
 	 * file. We don't care if the temp file is trashed, so it's always safe to
 	 * unlink it first.
 	 */
-	const char* tmp_name = format("%s.%s.rmXXXXXX", path, tmp_string());
+	char* tmp_name = format("%s.%s.rmXXXXXX", path, tmp_string());
+	int result = 0;
 	cc_log("Unlink %s via %s", path, tmp_name);
 	if (x_rename(path, tmp_name) == -1) {
-		return -1;
+		result = -1;
+		goto out;
 	}
 	if (unlink(tmp_name) == -1) {
-		return -1;
+		result = -1;
 	}
-	return 0;
+out:
+	free(tmp_name);
+	return result;
 }
 
 #ifndef _WIN32
@@ -1289,4 +1375,86 @@ read_text_file(const char *path, size_t size_hint)
 	} else {
 		return NULL;
 	}
+}
+
+static bool
+expand_variable(const char **str, char **result, char **errmsg)
+{
+	bool curly;
+	const char *p, *q;
+	char *name;
+	const char *value;
+
+	assert(**str == '$');
+	p = *str + 1;
+	if (*p == '{') {
+		curly = true;
+		++p;
+	} else {
+		curly = false;
+	}
+	q = p;
+	while (isalnum(*q) || *q == '_') {
+		++q;
+	}
+	if (curly) {
+		if (*q != '}') {
+			*errmsg = format("syntax error: missing '}' after \"%s\"", p);
+			return NULL;
+		}
+	}
+
+	if (q == p) {
+		/* Special case: don't consider a single $ the start of a variable. */
+		reformat(result, "%s$", *result);
+		return true;
+	}
+
+	name = x_strndup(p, q - p);
+	value = getenv(name);
+	if (!value) {
+		*errmsg = format("environment variable \"%s\" not set", name);
+		free(name);
+		return false;
+	}
+	reformat(result, "%s%s", *result, value);
+	if (!curly) {
+		--q;
+	}
+	*str = q;
+	free(name);
+	return true;
+}
+
+/*
+ * Substitute all instances of $VAR or ${VAR}, where VAR is an environment
+ * variable, in a string. Caller frees. If one of the environment variables
+ * doesn't exist, NULL will be returned and *errmsg will be an appropriate
+ * error message (caller frees).
+ */
+char *
+subst_env_in_string(const char *str, char **errmsg)
+{
+	const char *p; /* Interval start. */
+	const char *q; /* Interval end. */
+	char *result;
+
+	assert(errmsg);
+	*errmsg = NULL;
+
+	result = x_strdup("");
+	p = str;
+	q = str;
+	for (q = str; *q; ++q) {
+		if (*q == '$') {
+			reformat(&result, "%s%.*s", result, (int)(q - p), p);
+			if (!expand_variable(&q, &result, errmsg)) {
+				free(result);
+				return NULL;
+			}
+			p = q + 1;
+		}
+	}
+	reformat(&result, "%s%.*s", result, (int)(q - p), p);
+	return result;
 }

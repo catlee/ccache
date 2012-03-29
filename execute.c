@@ -19,6 +19,8 @@
 
 #include "ccache.h"
 
+extern struct conf *conf;
+
 static char *
 find_executable_in_path(const char *name, const char *exclude_name, char *path);
 
@@ -231,8 +233,8 @@ find_executable(const char *name, const char *exclude_name)
 		return x_strdup(name);
 	}
 
-	path = getenv("CCACHE_PATH");
-	if (!path) {
+	path = conf->path;
+	if (str_eq(path, "")) {
 		path = getenv("PATH");
 	}
 	if (!path) {
@@ -313,11 +315,4 @@ print_command(FILE *fp, char **argv)
 		fprintf(fp, "%s%s",  (i == 0) ? "" : " ", argv[i]);
 	}
 	fprintf(fp, "\n");
-}
-
-void
-print_executed_command(FILE *fp, char **argv)
-{
-	fprintf(fp, "%s: executing ", MYNAME);
-	print_command(fp, argv);
 }
